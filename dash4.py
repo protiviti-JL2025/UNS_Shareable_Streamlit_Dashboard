@@ -30,7 +30,7 @@ if uploaded_file:
     df.columns = df.columns.str.strip()
 
     st.sidebar.header("Select Analysis Type")
-    analysis_type = st.sidebar.selectbox("Choose", ['Analysis 1 - Overall View', 'Analysis 2 - Deep Dive into each Return Type', 'Analysis 3 - BRAND-based Deep Dive (Top 5)', 'Analysis 5 - Customers with only ER Returns', 'Analysis 6 - Closing Stock & DSI Trend', 'Analysis 7 - High Sales Return Ratio Customers'])
+    analysis_type = st.sidebar.selectbox("Choose", ['Analysis 1 - Overall View', 'Analysis 2 - Deep Dive into each Return Type', 'Analysis 3 - BRAND-based Deep Dive (Top 5)', 'Analysis 5 - Customers with only ER Returns', 'Analysis 6 - Closing Stock & DSI Trend', 'Analysis 7 - High Sales Return Ratio Customers', 'Analysis 8 - Brand wise MSI'])
 
     return_types = ['ER', 'NE', 'DR', 'SR']
     return_df = df[df['Tran_type'].isin(return_types)]
@@ -621,7 +621,6 @@ if uploaded_file:
             **{f"{l} DSI":"{:.1f}"   for l in labels}
         }))
 
-
     elif analysis_type == 'Analysis 7 - High Sales Return Ratio Customers':
     # ---------------- Analysis 7: Sales Ratio ----------------
         st.header("🔍 Analysis 7: Sales Return Ratio Deep Dive")
@@ -725,3 +724,82 @@ if uploaded_file:
             file_name="analysis7_sales_ratio.csv",
             mime="text/csv"
         )
+
+    elif analysis_type == 'Analysis 8 - Brand wise MSI':
+        st.header("Analysis 8 : Top Brands & Customers by MSI")
+
+        # 1) Upload MSI sheet
+        msi_file = st.file_uploader("Upload Sheet 2 with MSI data", type=["xlsx"], key="msi")
+        if not msi_file:
+            st.info("Please upload your MSI sheet to proceed.")
+            st.stop()
+
+        msi_df = load_data(msi_file)
+
+        # 2) Parse StartDt and assign fiscal quarter for FY24-25
+        msi_df["StartDt"] = pd.to_datetime(msi_df["StartDt"], format="%d-%m-%Y", errors="coerce")
+        msi_df = msi_df[
+            (msi_df["StartDt"] >= "2024-04-01") & (msi_df["StartDt"] < "2025-04-01")
+        ]
+        # Map month to quarter
+        def map_fy_quarter(dt):
+            m = dt.month
+            if 4 <= m <= 6:   return "Q1 (Apr-Jun)"
+            if 7 <= m <= 9:   return "Q2 (Jul-Sep)"
+            if 10 <= m <= 12: return "Q3 (Oct-Dec)"
+            return "Q4 (Jan-Mar)"
+        msi_df["Quarter"] = msi_df["StartDt"].apply(map_fy_quarter)
+
+        # 3) Compute overall avg MSI per Brand
+        brand_avg = (
+            msi_df.groupby("Brand")["MSI"]
+            .mean()
+            .sort_values(ascending=False)
+        )
+        top10_brands = brand_avg.head(10).index.tolist()
+
+        # 4) Bar chart of top 10 Brands
+        fig_b = go.Figure([go.Bar(
+            x=brand_avg.loc[top10_brands].index,
+            y=brand_avg.loc[top10_brands].values,
+            text=[f"{v:.2f}" for v in brand_avg.loc[top10_brands].values],
+            textposition="outside"
+        )])
+        fig_b.update_layout(
+            title="Top 10 Brands by Average MSI (FY24-25)",
+            xaxis_title="Brand",
+            yaxis_title="Avg MSI",
+            height=400
+        )
+        st.plotly_chart(fig_b, use_container_width=True)
+
+        # 5) Brand selector
+        selected_brand = st.selectbox("Select Brand for Customer Drilldown", top10_brands)
+
+        # 6) For that Brand: compute avg MSI per Customer per Quarter
+        df_b = msi_df[msi_df["Brand"] == selected_brand]
+        cust_q = (
+            df_b.groupby(["CUST_NAME","Quarter"])["MSI"]
+            .mean()
+            .unstack(fill_value=np.nan)
+        )
+
+        # Only keep customers with MSI > 3 in **every** quarter
+        quarters = ["Q1 (Apr-Jun)","Q2 (Jul-Sep)","Q3 (Oct-Dec)","Q4 (Jan-Mar)"]
+        # ensure all four columns exist
+        for q in quarters:
+            if q not in cust_q.columns:
+                cust_q[q] = np.nan
+        cust_q = cust_q[quarters]
+        qualifying = cust_q.dropna().loc[
+            (cust_q[quarters] > 3).all(axis=1)
+        ]
+
+        # 7) Display
+        st.markdown(f"### Customers of **{selected_brand}** with Avg MSI > 3 in Every Quarter")
+        if qualifying.empty:
+            st.write("No customers meet the criterion.")
+        else:
+            st.dataframe(
+                qualifying.style.format("{:.2f}")
+            )
