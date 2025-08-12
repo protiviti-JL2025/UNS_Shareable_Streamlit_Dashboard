@@ -533,8 +533,11 @@ if uploaded_file:
             returns
             .groupby(["CUST_NAME","Tran_type"])[metric_column]
             .sum()
+            .abs() 
             .unstack(fill_value=0)
         )
+        #again doing absolute value so that the gross amount is positive, else something like -400 which is 400 actually will come in top 10, but is actually no where near top 10 which would be in lakhs. 
+        
         cust_pv["Total"] = cust_pv.sum(axis=1)
         top_cust = cust_pv["Total"].sort_values(ascending=False).head(10).index.tolist()
         plot_df = cust_pv.loc[top_cust, ["SR","NE","Total"]].reset_index()
@@ -606,9 +609,15 @@ if uploaded_file:
         top_brands = brand_pv["Total"].sort_values(ascending=False).index.tolist()
         #the top brands will be shown according to SR + NE returns. 
 
-        # --- Build brand table ---    
+        #any brand that does not have SR or NE returns in the selected month won’t be in counted in the top brands even if they are in sheet 2. 
+
+        #now to show ALL brands for the customer (even if no returns that month), you should instead get the brand list from Sheet 2 for that customer: 
+
+        # Get all brands for the chosen customer from Sheet 2
+        all_brands = sheet2[sheet2["CUST_NAME"] == chosen]["Brand"].unique().tolist()
+
         brow = []
-        for b in top_brands:
+        for b in all_brands:
             d = {"Brand": b}
             for lbl, p in zip(labels, prior):
                 sf = sheet2[
@@ -617,20 +626,20 @@ if uploaded_file:
                     (sheet2["Month_Year"] == p)
                 ]
                 if not sf.empty:
-                    d[f"{lbl} MSI"] = sf["MSI"].mean()  # or sum if needed
-                    # d[f"{lbl} ClsStk"] = sf["ClsStk"].sum()  # if you want ClsStk as well
+                    d[f"{lbl} MSI"] = sf["MSI"].mean()
                 else:
                     d[f"{lbl} MSI"] = np.nan
             brow.append(d)
 
         brand_df = pd.DataFrame(brow).set_index("Brand")
 
-        #excluding any brand/customer combos that had no stock record in any of the trailing months.
+    #excluding any brand/customer combos that had no stock record in any of the trailing months.
         st.markdown(f"### {chosen}: Top Brands ClsStk & MSI")
         st.dataframe(brand_df.style.format({
             #**{f"{l} ClsStk":"{:,.0f}" for l in labels},
             **{f"{l} MSI":"{:.1f}"   for l in labels}
         }))
+
 
     elif analysis_type == 'Analysis 7 - High Sales Return Ratio Customers':
         # ---------------- Analysis 7: Sales Ratio ----------------
@@ -689,8 +698,9 @@ if uploaded_file:
         sales_df = df_filt[df_filt['Tran_type'].isin(['INV', 'IC'])].copy()
 
         # --- Step 4: Summarize per customer ---
-        return_summary = returns_df.groupby('CUST_NAME')['gross_amount'].sum().reset_index(name='Sales_Returns')
-        sales_summary = sales_df.groupby('CUST_NAME')['gross_amount'].sum().reset_index(name='Sales')
+        return_summary = returns_df.groupby('CUST_NAME')['gross_amount'].sum().abs().reset_index(name='Sales_Returns')
+        sales_summary = sales_df.groupby('CUST_NAME')['gross_amount'].sum().abs().reset_index(name='Sales')
+        #doing abs so that the percenatages don't show as negative. 
 
         # --- Step 5: Merge & compute ratio ---
         ratio_df = pd.merge(return_summary, sales_summary, on='CUST_NAME', how='inner')
@@ -747,7 +757,6 @@ if uploaded_file:
             file_name="analysis7_sales_ratio.csv",
             mime="text/csv"
         )
-
 
     elif analysis_type == 'Analysis 8 - Brand wise MSI':
         st.header("Analysis 8 : Top Brands & Customers by MSI (Quarter-wise)")
