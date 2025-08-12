@@ -602,7 +602,9 @@ if uploaded_file:
             .sum().unstack(fill_value=0)
         )
         brand_pv["Total"] = brand_pv.sum(axis=1)
-        top_brands = brand_pv["Total"].sort_values(ascending=False).head(5).index.tolist()
+        #top_brands = brand_pv["Total"].sort_values(ascending=False).head(5).index.tolist()
+        top_brands = brand_pv["Total"].sort_values(ascending=False).index.tolist()
+        #the top brands will be shown according to SR + NE returns. 
 
         # --- Build brand table ---    
         brow = []
@@ -623,109 +625,121 @@ if uploaded_file:
 
         brand_df = pd.DataFrame(brow).set_index("Brand")
 
-
-        st.markdown(f"### {chosen}: Top 5 Brands ClsStk & MSI")
+        #excluding any brand/customer combos that had no stock record in any of the trailing months.
+        st.markdown(f"### {chosen}: Top Brands ClsStk & MSI")
         st.dataframe(brand_df.style.format({
             #**{f"{l} ClsStk":"{:,.0f}" for l in labels},
             **{f"{l} MSI":"{:.1f}"   for l in labels}
         }))
 
     elif analysis_type == 'Analysis 7 - High Sales Return Ratio Customers':
-    # ---------------- Analysis 7: Sales Ratio ----------------
+        # ---------------- Analysis 7: Sales Ratio ----------------
         st.header("🔍 Analysis 7: Sales Return Ratio Deep Dive")
 
-        # Step 1: Dynamic Filters (Tran_type, Region, Area, BRAND)
         st.subheader("Filter: Transaction Type, Region, Area, and BRAND (Dynamic)")
         filtered_df = df.copy()
 
-        # Create 4-column layout
+        # --- Step 1: Dropdown filters ---
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
             tx_options = ['All', 'ER', 'DR', 'NE', 'SR']
             selected_tx = st.selectbox("Select Tran_type", tx_options)
 
+        # Region filter options depend on transaction type
+        if selected_tx == 'All':
+            df_tx = filtered_df
+        else:
+            # Keep INV + IC (sales) and the chosen return type
+            df_tx = filtered_df[
+                filtered_df['Tran_type'].isin(['INV', 'IC', selected_tx])
+            ]
+
         with col2:
-            # Region options depend on current filtered_df (after tx filter)
-            df_tx = filtered_df if selected_tx=='All' else filtered_df[filtered_df['Tran_type']==selected_tx]
             region_opts = ['All'] + sorted(df_tx['Region'].dropna().unique().tolist())
             selected_region = st.selectbox("Select Region", region_opts)
 
+        # Area options depend on tx + region
+        df_rg = df_tx if selected_region == 'All' else df_tx[df_tx['Region'] == selected_region]
         with col3:
-            # Area options depend on tx + region
-            df_rg = df_tx if selected_region=='All' else df_tx[df_tx['Region']==selected_region]
             area_opts = ['All'] + sorted(df_rg['Area'].dropna().unique().tolist())
             selected_area = st.selectbox("Select Area", area_opts)
 
+        # Brand options depend on tx + region + area
+        df_ar = df_rg if selected_area == 'All' else df_rg[df_rg['Area'] == selected_area]
         with col4:
-            # BRAND options depend on tx + region + area
-            df_ar = df_rg if selected_area=='All' else df_rg[df_rg['Area']==selected_area]
             brand_opts = ['All'] + sorted(df_ar['BRAND'].dropna().unique().tolist())
             selected_brand = st.selectbox("Select BRAND", brand_opts)
 
-        # Apply all filters in one go
-        df_filt = filtered_df.copy()
-        if selected_tx    != 'All': df_filt = df_filt[df_filt['Tran_type'] == selected_tx]
-        if selected_region!= 'All': df_filt = df_filt[df_filt['Region']    == selected_region]
-        if selected_area  != 'All': df_filt = df_filt[df_filt['Area']      == selected_area]
-        if selected_brand != 'All': df_filt = df_filt[df_filt['BRAND']     == selected_brand]
+        # --- Step 2: Apply all filters ---
+        df_filt = df_tx.copy()
+        if selected_region != 'All':
+            df_filt = df_filt[df_filt['Region'] == selected_region]
+        if selected_area != 'All':
+            df_filt = df_filt[df_filt['Area'] == selected_area]
+        if selected_brand != 'All':
+            df_filt = df_filt[df_filt['BRAND'] == selected_brand]
 
-        # Step 2: Build returns_df and sales_df
-        returns_df = df_filt[df_filt['Tran_type'].isin(['ER','SR','DR','NE'])].copy()
-        sales_df   = df_filt[df_filt['Tran_type'].isin(['INV','IC'])].copy()
+        # --- Step 3: Separate returns and sales ---
+        if selected_tx == 'All':
+            returns_df = df_filt[df_filt['Tran_type'].isin(['ER', 'SR', 'DR', 'NE'])].copy()
+        else:
+            returns_df = df_filt[df_filt['Tran_type'] == selected_tx].copy()
 
-        # Step 3: Summarize per customer
-        return_summary = returns_df.groupby('CUST_NAME')['Return_qty'] .sum().reset_index(name='Total_Returns')
-        sales_summary  = sales_df  .groupby('CUST_NAME')['sale_qty']  .sum().reset_index(name='Total_Sales')
+        sales_df = df_filt[df_filt['Tran_type'].isin(['INV', 'IC'])].copy()
 
-        # Merge & compute ratio
+        # --- Step 4: Summarize per customer ---
+        return_summary = returns_df.groupby('CUST_NAME')['gross_amount'].sum().reset_index(name='Sales_Returns')
+        sales_summary = sales_df.groupby('CUST_NAME')['gross_amount'].sum().reset_index(name='Sales')
+
+        # --- Step 5: Merge & compute ratio ---
         ratio_df = pd.merge(return_summary, sales_summary, on='CUST_NAME', how='inner')
-        ratio_df['Sales_Ratio'] = ratio_df['Total_Returns'] / ratio_df['Total_Sales']
-        ratio_df = ratio_df[ratio_df['Total_Sales']>0]
+        ratio_df = ratio_df[ratio_df['Sales'] > 0]
+        ratio_df['Sales_Ratio'] = (ratio_df['Sales_Returns'] / ratio_df['Sales']) * 100
 
-        # Step 4: Sort & pick top 10
-        ratio_df = ratio_df.sort_values('Sales_Ratio', ascending=False)
+        # --- Step 6: Sort & pick top 10 ---
         top_n = 10
+        ratio_df = ratio_df.sort_values('Sales_Ratio', ascending=False)
         top_ratio_df = ratio_df.head(top_n)
 
-        # Step 5: Add metadata for context
-        meta = df_filt[['CUST_NAME','Region','Area','BRAND']].drop_duplicates('CUST_NAME')
+        # --- Step 7: Add metadata ---
+        meta = df_filt[['CUST_NAME', 'Region', 'Area', 'BRAND']].drop_duplicates('CUST_NAME')
         top_ratio_df = top_ratio_df.merge(meta, on='CUST_NAME', how='left')
 
-        # Step 6: Display table
+        # --- Step 8: Display table ---
         st.subheader(f"Top {top_n} Customers by Sales Return Ratio")
         st.dataframe(
             top_ratio_df[[
-                'CUST_NAME','Region','Area','BRAND',
-                'Total_Returns','Total_Sales','Sales_Ratio'
+                'CUST_NAME', 'Region', 'Area', 'BRAND',
+                'Sales_Returns', 'Sales', 'Sales_Ratio'
             ]]
-            .rename(columns={'CUST_NAME':'Customer'})
+            .rename(columns={'CUST_NAME': 'Customer'})
             .style.format({
-                'Total_Returns':'{:,.0f}',
-                'Total_Sales':'{:,.0f}',
-                'Sales_Ratio':'{:.2%}'
+                'Sales_Returns': '{:,.0f}',
+                'Sales': '{:,.0f}',
+                'Sales_Ratio': '{:.2f}%'
             })
         )
 
-        # Step 7: Plot bar chart
+        # --- Step 9: Plot bar chart ---
         st.subheader(f"📊 Top {top_n} Customers with Highest Return Ratio")
         fig = px.bar(
             top_ratio_df,
             x='CUST_NAME', y='Sales_Ratio',
-            hover_data=['Total_Returns','Total_Sales'],
+            hover_data=['Sales_Returns', 'Sales'],
             color='CUST_NAME',
-            text=top_ratio_df['Sales_Ratio'].map(lambda x: f"{x:.1%}"),
+            text=top_ratio_df['Sales_Ratio'].map(lambda x: f"{x:.1f}%"),
             title="Sales Return Ratio by Customer"
         )
         fig.update_traces(textposition='outside', showlegend=False)
         fig.update_layout(
-            yaxis_title="Sales Return Ratio",
+            yaxis_title="Sales Return Ratio (%)",
             xaxis_title="Customer",
             height=500
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # Step 8: Download
+        # --- Step 10: Download ---
         csv = top_ratio_df.to_csv(index=False).encode('utf-8')
         st.download_button(
             "Download Sales Ratio Data as CSV",
@@ -733,6 +747,7 @@ if uploaded_file:
             file_name="analysis7_sales_ratio.csv",
             mime="text/csv"
         )
+
 
     elif analysis_type == 'Analysis 8 - Brand wise MSI':
         st.header("Analysis 8 : Top Brands & Customers by MSI (Quarter-wise)")
