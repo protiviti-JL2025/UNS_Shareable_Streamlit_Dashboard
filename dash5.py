@@ -30,7 +30,7 @@ if uploaded_file:
     df.columns = df.columns.str.strip()
 
     st.sidebar.header("Select Analysis Type")
-    analysis_type = st.sidebar.selectbox("Choose", ['Analysis 1 - Overall View', 'Analysis 2 - Deep Dive into each Return Type', 'Analysis 3 - BRAND-based Deep Dive (Top 5)', 'Analysis 5 - Customers with only ER Returns', 'Analysis 6 - Closing Stock & DSI Trend', 'Analysis 7 - High Sales Return Ratio Customers', 'Analysis 8 - Brand wise MSI'])
+    analysis_type = st.sidebar.selectbox("Choose", ['Analysis 1 - Overall View', 'Analysis 2 - Deep Dive into each Return Type', 'Analysis 3 - BRAND-based Deep Dive (Top 5)', 'Analysis 5 - Customers with only ER Returns', 'Analysis 6 - Closing Stock & MSI Trend', 'Analysis 7 - High Sales Return Ratio Customers', 'Analysis 8 - Brand wise MSI'])
 
     return_types = ['ER', 'NE', 'DR', 'SR']
     return_df = df[df['Tran_type'].isin(return_types)]
@@ -489,8 +489,8 @@ if uploaded_file:
         st.markdown("#### Summary Table (Customers with Gross Amount > 10000 and Sales ration > 3% i.e. 0.03)")
         st.dataframe(final_summary.sort_values(by='Sales_Ratio', ascending=False))
 
-    elif analysis_type == "Analysis 6 - Closing Stock & DSI Trend":
-        st.subheader("Analysis 6: SR/NE Returns vs 3-Month Stock & DSI")
+    elif analysis_type == "Analysis 6 - Closing Stock & MSI Trend":
+        st.subheader("Analysis 6: SR/NE Returns vs 3-Month Stock & MSI")
 
         # --- Metric selector for SR/NE bar chart ---
         metric_option = st.selectbox("Select Metric", ['Return Quantity', 'Gross Amount'])
@@ -501,7 +501,7 @@ if uploaded_file:
 
         # --- Upload and load Sheet 2 ---
         uploaded_file_sheet2 = st.file_uploader(
-            "Upload Sheet 2 (Closing Stock + DSI)", type=["xlsx"], key="sheet2"
+            "Upload Sheet 2 (Closing Stock + MSI)", type=["xlsx"], key="sheet2"
         )
         if not uploaded_file_sheet2:
             st.info("Please upload the second sheet to continue.")
@@ -561,12 +561,12 @@ if uploaded_file:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # --- Pivot Sheet 2 by CUST_NAME & Month_Year for ClsStk & DSI ---
+        # --- Pivot Sheet 2 by CUST_NAME & Month_Year for ClsStk & MSI ---
         stock_grp = (
             sheet2
             .groupby(["CUST_NAME","Month_Year"], as_index=False)
             .agg(ClsStk_total=("ClsStk","sum"),
-                DSI_mean=("DSI","mean"))
+                DSI_mean=("MSI","mean"))
         )
 
         # --- Determine the three months before sel_period ---
@@ -581,14 +581,14 @@ if uploaded_file:
             for lbl,p in zip(labels, prior):
                 sf = sub[sub["Month_Year"]==p]
                 #d[f"{lbl} ClsStk"] = sf["ClsStk_total"].sum() if not sf.empty else 0
-                d[f"{lbl} DSI"]    = sf["DSI_mean"].iloc[0] if not sf.empty else np.nan
+                d[f"{lbl} MSI"]    = sf["DSI_mean"].iloc[0] if not sf.empty else np.nan
             rows.append(d)
         overall_df = pd.DataFrame(rows).set_index("Customer")
 
-        st.markdown("### Top 10 Customers: 3-Month ClsStk & DSI")
+        st.markdown("### Top 10 Customers: 3-Month ClsStk & MSI")
         st.dataframe(overall_df.style.format({
             #**{f"{l} ClsStk":"{:,.0f}" for l in labels},
-            **{f"{l} DSI":"{:.1f}"   for l in labels}
+            **{f"{l} MSI":"{:.1f}"   for l in labels}
         }))
 
         # --- Customer dropdown for brand-level details ---
@@ -604,21 +604,30 @@ if uploaded_file:
         brand_pv["Total"] = brand_pv.sum(axis=1)
         top_brands = brand_pv["Total"].sort_values(ascending=False).head(5).index.tolist()
 
-        # --- Build brand table ---
+        # --- Build brand table ---    
         brow = []
         for b in top_brands:
-            d = {"Brand":b}
-            for lbl,p in zip(labels, prior):
-                sf = cust_stock[cust_stock["CUST_NAME"]==chosen]
-                #d[f"{lbl} ClsStk"] = sf["ClsStk_total"][sf["CUST_NAME"]==chosen][sf["Month_Year"]==p].sum() if not sf.empty else 0
-                d[f"{lbl} DSI"]    = sf["DSI_mean"][sf["CUST_NAME"]==chosen][sf["Month_Year"]==p].mean() if not sf.empty else np.nan
+            d = {"Brand": b}
+            for lbl, p in zip(labels, prior):
+                sf = sheet2[
+                    (sheet2["CUST_NAME"] == chosen) &
+                    (sheet2["Brand"] == b) &
+                    (sheet2["Month_Year"] == p)
+                ]
+                if not sf.empty:
+                    d[f"{lbl} MSI"] = sf["MSI"].mean()  # or sum if needed
+                    # d[f"{lbl} ClsStk"] = sf["ClsStk"].sum()  # if you want ClsStk as well
+                else:
+                    d[f"{lbl} MSI"] = np.nan
             brow.append(d)
+
         brand_df = pd.DataFrame(brow).set_index("Brand")
 
-        st.markdown(f"### {chosen}: Top 5 Brands ClsStk & DSI")
+
+        st.markdown(f"### {chosen}: Top 5 Brands ClsStk & MSI")
         st.dataframe(brand_df.style.format({
             #**{f"{l} ClsStk":"{:,.0f}" for l in labels},
-            **{f"{l} DSI":"{:.1f}"   for l in labels}
+            **{f"{l} MSI":"{:.1f}"   for l in labels}
         }))
 
     elif analysis_type == 'Analysis 7 - High Sales Return Ratio Customers':
